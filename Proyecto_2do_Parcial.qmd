@@ -1,0 +1,141 @@
+---
+title: "Proyecto_2do_Parcial"
+author:
+
+- "Jazmin Guadalupe Cruz Bertadillo"
+- "Gabriela Michelle Álvarez Guerra"
+- "Jacqueline Guadalupe Cruz Bertadillo"
+
+editor: visual
+---
+
+# Impacto de Salarios y Oferta Monetaria en la Inflación
+
+## 1.Carga de librerías y descarga automática de datos
+
+Descargamos directamente desde la plataforma FRED las series en frecuencia mensual (2010–2026) para las 3 variables del estudio: el Índice Nacional de Precios al Consumidor (`CPIAUCSL`, variable $Y$), el Salario promedio por hora nominal (`AHETPI`, variable $X_1$) y la Masa Monetaria M2 (`WM2NS`, variable $X_2$)
+
+```{r}
+# 1. Cargar la librería necesaria para conexión con FRED
+if(!require(quantmod)) install.packages("quantmod")
+library(quantmod)
+
+# 2. Descargar las series econométricas desde FRED
+getSymbols(c("CPIAUCSL", "AHETPI", "WM2NS"), src = "FRED")
+
+# 3. Homogeneizar frecuencia a nivel mensual y unir variables
+datos_m2 <- to.monthly(WM2NS, indexAt = "firstof", OHLC = FALSE)
+datos_raw <- merge(CPIAUCSL, AHETPI, datos_m2)
+
+# 4. Filtrar periodo (2010 a la fecha) y renombrar columnas
+datos <- na.omit(datos_raw["2010/"])
+colnames(datos) <- c("INPC", "Salario", "Oferta_Monetaria")
+
+# Inspección previa de la base de datos
+head(datos)
+```
+
+## 2.Transformación logarítmica y estimación del modelo (MCO)
+
+Aplicamos la transformación doble logarítmica (Log-Log) requerida por la teoría para medir elasticidades constantes (Gujarati, Cap. 6). La ecuación poblacional estimada por Mínimos Cuadrados Ordinarios es:
+
+$\ln(\text{INPC}_t) = \beta_1 + \beta_2 \ln(\text{Salario}_t) + \beta_3 \ln(\text{OfertaMonetaria}_t) + u_t$
+
+```{r}
+# Estimación del modelo lineal múltiple en escala logarítmica
+modelo_log <- lm(log(INPC) ~ log(Salario) + log(Oferta_Monetaria), data = datos)
+
+# Desplegar la tabla completa de regresión
+summary(modelo_log)
+```
+
+### Interpretación:
+
+El coeficiente estimado para el Salario ($0.9174$) indica que por cada $1\%$ que aumenta el salario nominal, los precios al consumidor incrementan en aproximadamente $0.917\%$ , manteniendo constante la oferta monetaria.
+
+## 3. Evaluación de Pruebas de Hipótesis Individuales (Prueba $t$ de Student)
+
+Se evalúa la significancia individual de cada parámetro para probar si el salario o la masa monetaria influyen en la inflación.
+
+- **Hipótesis nula (**$H_0$): $\beta_j = 0$ (La variable no influye significativamente en la inflación).
+
+- **Hipótesis alternativa (**$H_1$): $\beta_j \neq 0$ (La variable sí influye de manera significativa).
+
+```{r}
+# Extraer la tabla de coeficientes y estadísticas t de Student
+resumen_modelo <- summary(modelo_log)
+coeficientes_y_pruebast <- resumen_modelo$coefficients
+print(coeficientes_y_pruebast)
+
+```
+
+### Interpretación:
+
+Los salarios obtienen un $t\text{-value}$ enorme de 48.75 con un p-valor de ($6.85 \times 10^{-112}$), confirmando que los salarios son la variable con mayor significancia para explicar el nivel de precios en el periodo analizado.
+
+## 4.Evaluación de la Prueba de Hipótesis Global (Prueba $F$ de Snedecor)
+
+Evalúa la validez en conjunto del modelo de regresión lineal múltiple (Gujarati, Cap. 7).
+
+- **Hipótesis nula (**$H_0$): $\beta_2 = \beta_3 = 0$ (Ninguna variable explicativa ayuda a explicar la inflación).
+
+- **Hipótesis alternativa (**$H_1$): Al menos un $\beta_j \neq 0$ (El modelo global es estadísticamente válido).
+
+```{r}
+# Extraer el estadístico F y calcular su p-value
+f_estadistico <- resumen_modelo$fstatistic
+p_valor_f <- pf(f_estadistico[1], f_estadistico[2], f_estadistico[3], lower.tail = FALSE)
+
+cat("Estadístico F de la prueba global:", f_estadistico[1], "\n")
+cat("P-value del modelo conjunto:", p_valor_f, "\n")
+```
+
+### Interpretación:
+
+Como el $p\text{-valor}$ resulta prácticamente igual a cero (mucho menor al nivel de significancia $\alpha = 0.05$), se rechaza la hipótesis nula **(**$H_0$). Esto demuestra que el modelo en su conjunto es estadísticamente válido.
+
+## 5.Intervalos de Confianza para los Parámetros ($\beta$)
+
+Permite establecer el límite inferior y superior entre los cuales se encuentra el verdadero parámetro de elasticidad poblacional con un $95\%$ de nivel de confianza.
+
+```{r}
+# Obtener los intervalos de confianza al 95% para beta_1, beta_2 y beta_3
+ic_parametros <- confint(modelo_log, level = 0.95)
+print(ic_parametros)
+```
+
+### Interpretación:
+
+Con un $95\%$ de nivel de confianza, la verdadera elasticidad del salario en la población se encuentra entre $0.8803$ y $0.9545$ . Como este rango no incluye el número cero y todos sus valores son positivos, se confirma de nuevo que un aumento salarial impacta en un aumento en el nivel general de precios.
+
+## 6.Intervalos de Confianza para Predicciones (Promedio vs. Puntual)
+
+Calcula la respuesta del nivel de precios ante un escenario hipotético futuro ($Salario = \$32\text{ USD/hora}$ y $Oferta\_Monetaria = \$22,000\text{ mil millones USD}$):
+
+- **Intervalo Promedio:** Estimación de la esperanza matemática de la inflación $E(Y\vert{}X)$.
+
+- **Intervalo Puntual:** Predicción individual para un dato particular de la inflación $Y_0$, incorporando la varianza de la perturbación estocástica $u_0$.
+
+```{r}
+# 1. Definir el nuevo escenario de datos
+escenario_futuro <- data.frame(Salario = 32, Oferta_Monetaria = 22000)
+
+# 2. Intervalo de Confianza Promedio (Esperanza matemática E(Y|X))
+ic_promedio_log <- predict(modelo_log, newdata = escenario_futuro, interval = "confidence", level = 0.95)
+ic_promedio_real <- exp(ic_promedio_log) # Anti-logaritmo para volver a valores reales de INPC
+
+# 3. Intervalo de Confianza Puntual (Predicción individual Y_0)
+ic_puntual_log <- predict(modelo_log, newdata = escenario_futuro, interval = "prediction", level = 0.95)
+ic_puntual_real <- exp(ic_puntual_log) # Anti-logaritmo para volver a valores reales de INPC
+
+# 4. Imprimir los resultados
+cat("--- INTERVALO PROMEDIO E(Y|X) ---\n")
+print(ic_promedio_real)
+
+cat("\n--- INTERVALO PUNTUAL Y_0 ---\n")
+print(ic_puntual_real)
+```
+
+### Interpretación:
+
+Ante un escenario donde el salario promedio alcanza los \$32 USD/hora y la oferta monetaria esta en \$22,000 mil millones, el modelo pronostica un valor puntual estimado del INPC de 329.92 puntos. Con un 95% de confianza, la inflación promedio esperada se encuentra entre 328.44 y 331.41 puntos. La predicción para una observación mensual individual presenta un intervalo más amplio (322.01 a 338.04 puntos), debido a que absorbe la varianza de la perturbación estocástica de acuerdo con Gujarati (Capítulo 3 y 8).
